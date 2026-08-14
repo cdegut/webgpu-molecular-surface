@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css"
+                           integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm"
+                           crossorigin="anonymous">
+
+    <title>WebGPU Molecular Surface</title>
+</head>
+<body>
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-12 text-center">
+                <h4>WebGPU Molecular Surface</h4>
+                <canvas id="webgpu-canvas" class="img-fluid" width="1280" height="720"></canvas>
+                <div class="col-12 alert alert-danger" id="no-webgpu" style="display:none;">
+                    <h4 id="no-webgpu-title">Error: Your browser does not support WebGPU</h4>
+                    <p id="no-webgpu-hint" class="text-left mb-0"></p>
+                </div>
+            </div>
+            <div class="mx-auto col-12 col-lg-8 row">
+                <div class="col-12 mb-2">
+                    <h4>Molecular Surface</h4>
+                </div>
+                <div class="col-12 col-sm-12 mb-2">
+                    <input type="file" class="form-control-file" id="structureFile"
+                           accept=".pdb,.cif,.mmcif,.ent,.mmjson">
+                </div>
+                <div class="col-6 col-sm-6 mb-2">
+                    Surface: <select id="surfaceMode">
+                        <option value="ses" selected>Solvent-excluded (SES)</option>
+                        <option value="vdw">van der Waals</option>
+                    </select>
+                </div>
+                <div class="col-6 col-sm-6 mb-2">
+                    Resolution: <select id="gridResolution">
+                        <option value="96">Coarse (96)</option>
+                        <option value="128" selected>Medium (128)</option>
+                        <option value="192">Fine (192)</option>
+                        <option value="256">Extra fine (256)</option>
+                    </select>
+                </div>
+                <div class="col-6 col-sm-6 mb-2">
+                    <label class="mr-3"><input type="checkbox" id="showSurface" checked> Surface</label>
+                    <label><input type="checkbox" id="showAtoms" checked> Atoms</label>
+                </div>
+                <div id="stats" class="col-6 col-sm-6 mb-sm-0 mb-2">
+                </div>
+                <div class="col-12 mb-2">
+                    <h4>Isovalue (0.5 = surface)</h4>
+                   <input type="range" class="form-control-range" id="isovalueSlider"
+                           min="0.0" max="1.0" step="0.001" value="0.5">
+                </div>
+                <div class="col-12 mt-lg-2 mt-0">
+                    <p id="loadingText"></p>
+                    <div class="progress mb-2">
+                        <div id="loadingProgressBar" class="progress-bar" role="progressbar"
+                             aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                </div>
+
+                <div id="timestamp-stats" class="col-12 col-sm-12 mb-sm-0 mb-2">
+                </div>
+            </div>
+            <div class="mx-auto col-12 col-lg-8 row">
+                <div class="col-12 mt-lg-2 mt-0">
+                    <h4>Camera Controls</h4>
+                    <p>Desktop: Left-click + drag to rotate, scroll to zoom,
+                    right-click + drag to pan.
+                    <br/>
+                    Touch: One finger drag to rotate, pinch to zoom, two finger drag to pan.
+
+                    <h4>Description</h4>
+                    Upload a PDB or mmCIF structure. It is parsed in-browser with
+                    <a href="https://github.com/project-gemmi/gemmi">gemmi</a> (WebAssembly),
+                    a solvent-excluded or van&nbsp;der&nbsp;Waals surface field is computed,
+                    and the surface is extracted on the GPU with
+                    <a href="https://en.wikipedia.org/wiki/Marching_cubes">Marching Cubes</a>
+                    via <a href="https://github.com/Twinklebear/webgpu-marching-cubes">webgpu-marching-cubes</a>.
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
