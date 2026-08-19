@@ -6,6 +6,7 @@ import {Volume} from "./marching-cubes/volume";
 import {MarchingCubes, MarchingCubesResult} from "./marching-cubes/marching_cubes";
 import {loadGemmi, structureToAtoms} from "./molecular/gemmi";
 import {SurfaceMode, SurfaceAtom, buildSurfaceGrid} from "./molecular/surface";
+import {parseMrc} from "./molecular/mrc";
 import {cpkColor} from "./molecular/cpk";
 import renderMeshShaders from "./marching-cubes/render_mesh.wgsl";
 import renderSpheresWgsl from "./molecular/render_spheres.wgsl";
@@ -101,7 +102,10 @@ import {compileShader} from "./marching-cubes/util";
     let volume: Volume = null;
     let mc: MarchingCubes = null;
     let isosurface: MarchingCubesResult = null;
-    let spacing = 1.0;
+    // Per-axis voxel size in Angstroms (density maps can be anisotropic).
+    let spacing: [number, number, number] = [1.0, 1.0, 1.0];
+    // Density-map stats for sigma -> density contour conversion (null in structure mode).
+    let mapStats: {mean: number; rms: number} | null = null;
     let rebuildRequested = false;
     let busy = false;
 
@@ -248,6 +252,150 @@ import {compileShader} from "./marching-cubes/util";
 
     // (Re)build the volume, marching-cubes pipeline and camera for the current
     // file / mode / resolution selection.
+    const isMapFile = (name: string) => {
+        const lower = name.toLowerCase();
+        return lower.endsWith(".mrc") || lower.endsWith(".ccp4") || lower.endsWith(".map");
+    };
+
+    const isovalueTitle = () => document.getElementById("isovalueTitle") as HTMLElement;
+
+    // Structure files: isovalue slider is a 0..1 field value (0.5 = surface).
+    const setStructureUi = () => {
+        modeSelect.disabled = false;
+        showAtomsCheckbox.disabled = false;
+        isovalueSlider.min = "0";
+        isovalueSlider.max = "1";
+        isovalueSlider.step = "0.001";
+        isovalueSlider.value = "0.5";
+        isovalueTitle().innerHTML = "Isovalue (0.5 = surface)";
+    };
+
+    // Density maps: isovalue slider is a contour level in sigma (RMSD) units.
+    const setMapUi = () => {
+        modeSelect.disabled = true;
+        showAtomsCheckbox.disabled = true;
+        isovalueSlider.min = "-3";
+        isovalueSlider.max = "10";
+        isovalueSlider.step = "0.1";
+        isovalueSlider.value = "1";
+        isovalueTitle().innerHTML = "Contour level (σ)";
+    };
+
+    const loadStructure = async (file: File) => {
+        statusText.innerHTML = "Parsing structure and building surface field...";
+        const mod = await loadGemmi();
+        const text = await file.text();
+        const mode = modeSelect.value as SurfaceMode;
+        // "Full" (value 0) is only meaningful for maps; structures always need a
+        // target grid size, so fall back to the finest available resolution.
+        const sel = parseInt(resolutionSelect.value, 10);
+        const maxDim = sel > 0 ? sel : 256;
+
+        // Parse once and reuse the atoms for both the surface field and the
+        // atom spheres.
+        const structure = mod.read_structure_from_string(text, file.name);
+        let parsedAtoms: SurfaceAtom[];
+        try {
+            parsedAtoms = structureToAtoms(mod, structure);
+        } finally {
+            structure.delete();
+        }
+        const grid = buildSurfaceGrid(parsedAtoms, {mode, maxDim});
+
+        volume = await Volume.fromFloat32([grid.nx, grid.ny, grid.nz], grid.data, device);
+        mc = await MarchingCubes.create(volume, device);
+        spacing = [grid.spacing, grid.spacing, grid.spacing];
+        mapStats = null;
+        currentIsovalue = -1;
+        setStructureUi();
+
+        // Centre the atoms on the grid centre so they share the surface's
+        // world space (render_mesh.wgsl maps grid indices to a world space
+        // centred at the origin).
+        const gc: [number, number, number] = [
+            grid.origin[0] + grid.nx * spacing[0] * 0.5,
+            grid.origin[1] + grid.ny * spacing[1] * 0.5,
+            grid.origin[2] + grid.nz * spacing[2] * 0.5,
+        ];
+        atomCount = parsedAtoms.length;
+        const atomData = new Float32Array(atomCount * 8);
+        for (let i = 0; i < atomCount; ++i) {
+            const a = parsedAtoms[i];
+            const c = cpkColor(a.element);
+            atomData[i * 8 + 0] = a.x - gc[0];
+            atomData[i * 8 + 1] = a.y - gc[1];
+            atomData[i * 8 + 2] = a.z - gc[2];
+            atomData[i * 8 + 3] = a.r;
+            atomData[i * 8 + 4] = c[0];
+            atomData[i * 8 + 5] = c[1];
+            atomData[i * 8 + 6] = c[2];
+            atomData[i * 8 + 7] = 1.0;
+        }
+        if (atomBuffer) {
+            atomBuffer.destroy();
+        }
+        atomBuffer = device.createBuffer({
+            size: atomData.byteLength,
+            usage: GPUBufferUsage.STORAGE,
+            mappedAtCreation: true,
+        });
+        new Float32Array(atomBuffer.getMappedRange()).set(atomData);
+        atomBuffer.unmap();
+
+        sphereBindGroup = device.createBindGroup({
+            layout: sphereBindGroupLayout,
+            entries: [
+                {binding: 0, resource: {buffer: sphereParamsBuffer}},
+                {binding: 1, resource: {buffer: atomBuffer}},
+            ]
+        });
+
+        const physX = grid.nx * spacing[0], physY = grid.ny * spacing[1], physZ = grid.nz * spacing[2];
+        const diagonal = Math.sqrt(physX * physX + physY * physY + physZ * physZ);
+        const defaultEye = vec3.set(vec3.create(), 0.0, 0.0, physZ * 0.75);
+        camera = new ArcballCamera(defaultEye, center, up, diagonal * 0.1,
+            [canvas.width, canvas.height]);
+
+        statusText.innerHTML =
+            `${file.name} — ${grid.nx}×${grid.ny}×${grid.nz} @ ${spacing[0].toFixed(3)} Å, ` +
+            `${atomCount} atoms`;
+    };
+
+    const loadMap = async (file: File) => {
+        statusText.innerHTML = "Parsing MRC map...";
+        const buf = await file.arrayBuffer();
+        const maxDim = parseInt(resolutionSelect.value, 10);
+        const map = parseMrc(buf, {maxDim});
+
+        volume = await Volume.fromFloat32([map.nx, map.ny, map.nz], map.data, device);
+        mc = await MarchingCubes.create(volume, device);
+        spacing = map.spacing;
+        mapStats = {mean: map.mean, rms: map.rms};
+        currentIsovalue = -1;
+        setMapUi();
+
+        // Density maps have no atoms.
+        atomCount = 0;
+        sphereBindGroup = null;
+        if (atomBuffer) {
+            atomBuffer.destroy();
+            atomBuffer = null;
+        }
+
+        const physX = map.nx * spacing[0], physY = map.ny * spacing[1], physZ = map.nz * spacing[2];
+        const diagonal = Math.sqrt(physX * physX + physY * physY + physZ * physZ);
+        const defaultEye = vec3.set(vec3.create(), 0.0, 0.0, physZ * 0.75);
+        camera = new ArcballCamera(defaultEye, center, up, diagonal * 0.1,
+            [canvas.width, canvas.height]);
+
+        const ds = map.downsampled ? ` (downsampled to fit ${maxDim})` : "";
+        statusText.innerHTML =
+            `${file.name} — ${map.nx}×${map.ny}×${map.nz} @ ` +
+            `${spacing[0].toFixed(2)}×${spacing[1].toFixed(2)}×${spacing[2].toFixed(2)} Å${ds}, ` +
+            `σ=${map.rms.toFixed(2)} (mean=${map.mean.toFixed(2)}, ` +
+            `min=${map.min.toFixed(2)}, max=${map.max.toFixed(2)})`;
+    };
+
     const rebuild = async () => {
         if (busy) {
             rebuildRequested = true;
@@ -259,78 +407,11 @@ import {compileShader} from "./marching-cubes/util";
         }
         busy = true;
         try {
-            statusText.innerHTML = "Parsing structure and building surface field...";
-            const mod = await loadGemmi();
-            const text = await file.text();
-            const mode = modeSelect.value as SurfaceMode;
-            const maxDim = parseInt(resolutionSelect.value, 10);
-
-            // Parse once and reuse the atoms for both the surface field and the
-            // atom spheres.
-            const structure = mod.read_structure_from_string(text, file.name);
-            let parsedAtoms: SurfaceAtom[];
-            try {
-                parsedAtoms = structureToAtoms(mod, structure);
-            } finally {
-                structure.delete();
+            if (isMapFile(file.name)) {
+                await loadMap(file);
+            } else {
+                await loadStructure(file);
             }
-            const grid = buildSurfaceGrid(parsedAtoms, {mode, maxDim});
-
-            volume = await Volume.fromFloat32([grid.nx, grid.ny, grid.nz], grid.data, device);
-            mc = await MarchingCubes.create(volume, device);
-            spacing = grid.spacing;
-            currentIsovalue = -1;
-
-            // Centre the atoms on the grid centre so they share the surface's
-            // world space (render_mesh.wgsl maps grid indices to a world space
-            // centred at the origin).
-            const gc: [number, number, number] = [
-                grid.origin[0] + grid.nx * spacing * 0.5,
-                grid.origin[1] + grid.ny * spacing * 0.5,
-                grid.origin[2] + grid.nz * spacing * 0.5,
-            ];
-            atomCount = parsedAtoms.length;
-            const atomData = new Float32Array(atomCount * 8);
-            for (let i = 0; i < atomCount; ++i) {
-                const a = parsedAtoms[i];
-                const c = cpkColor(a.element);
-                atomData[i * 8 + 0] = a.x - gc[0];
-                atomData[i * 8 + 1] = a.y - gc[1];
-                atomData[i * 8 + 2] = a.z - gc[2];
-                atomData[i * 8 + 3] = a.r;
-                atomData[i * 8 + 4] = c[0];
-                atomData[i * 8 + 5] = c[1];
-                atomData[i * 8 + 6] = c[2];
-                atomData[i * 8 + 7] = 1.0;
-            }
-            if (atomBuffer) {
-                atomBuffer.destroy();
-            }
-            atomBuffer = device.createBuffer({
-                size: atomData.byteLength,
-                usage: GPUBufferUsage.STORAGE,
-                mappedAtCreation: true,
-            });
-            new Float32Array(atomBuffer.getMappedRange()).set(atomData);
-            atomBuffer.unmap();
-
-            sphereBindGroup = device.createBindGroup({
-                layout: sphereBindGroupLayout,
-                entries: [
-                    {binding: 0, resource: {buffer: sphereParamsBuffer}},
-                    {binding: 1, resource: {buffer: atomBuffer}},
-                ]
-            });
-
-            const physX = grid.nx * spacing, physY = grid.ny * spacing, physZ = grid.nz * spacing;
-            const diagonal = Math.sqrt(physX * physX + physY * physY + physZ * physZ);
-            const defaultEye = vec3.set(vec3.create(), 0.0, 0.0, physZ * 0.75);
-            camera = new ArcballCamera(defaultEye, center, up, diagonal * 0.1,
-                [canvas.width, canvas.height]);
-
-            statusText.innerHTML =
-                `${file.name} — ${grid.nx}×${grid.ny}×${grid.nz} @ ${spacing.toFixed(3)} Å, ` +
-                `${atomCount} atoms`;
         } catch (err) {
             console.error(err);
             statusText.innerHTML = `Error: ${err.message ?? err}`;
@@ -378,6 +459,9 @@ import {compileShader} from "./marching-cubes/util";
         }
 
         let sliderValue = parseFloat(isovalueSlider.value);
+        // Maps: the slider is in sigma (RMSD) units, so convert to a density
+        // value; structures use the field value directly (0..1).
+        const isovalue = mapStats ? mapStats.mean + sliderValue * mapStats.rms : sliderValue;
         let recomputeSurface = sliderValue != currentIsovalue;
 
         if (recomputeSurface) {
@@ -387,7 +471,7 @@ import {compileShader} from "./marching-cubes/util";
 
             currentIsovalue = sliderValue;
             let start = performance.now();
-            isosurface = await mc.computeSurface(currentIsovalue);
+            isosurface = await mc.computeSurface(isovalue);
             let end = performance.now();
 
             perfDisplay.innerHTML =
@@ -428,7 +512,7 @@ import {compileShader} from "./marching-cubes/util";
             let map = uploadBuffer.getMappedRange();
             new Float32Array(map).set(projView);
             new Uint32Array(map, 16 * 4, 4).set(volume.dims);
-            new Float32Array(map, 20 * 4, 1).set([spacing]);
+            new Float32Array(map, 20 * 4, 3).set(spacing);
             // Camera position (world space) = translation of the inverse view matrix.
             const invView = mat4.invert(mat4.create(), camera.camera);
             new Float32Array(map, 24 * 4, 3).set([invView[12], invView[13], invView[14]]);

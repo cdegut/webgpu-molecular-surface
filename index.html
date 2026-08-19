@@ -27,7 +27,7 @@
                 </div>
                 <div class="col-12 col-sm-12 mb-2">
                     <input type="file" class="form-control-file" id="structureFile"
-                           accept=".pdb,.cif,.mmcif,.ent,.mmjson">
+                           accept=".pdb,.cif,.mmcif,.ent,.mmjson,.mrc,.ccp4,.map">
                 </div>
                 <div class="col-6 col-sm-6 mb-2">
                     Surface: <select id="surfaceMode">
@@ -41,6 +41,7 @@
                         <option value="128" selected>Medium (128)</option>
                         <option value="192">Fine (192)</option>
                         <option value="256">Extra fine (256)</option>
+                        <option value="512">Ultra (512)</option>
                     </select>
                 </div>
                 <div class="col-6 col-sm-6 mb-2">
@@ -50,7 +51,7 @@
                 <div id="stats" class="col-6 col-sm-6 mb-sm-0 mb-2">
                 </div>
                 <div class="col-12 mb-2">
-                    <h4>Isovalue (0.5 = surface)</h4>
+                    <h4 id="isovalueTitle">Isovalue (0.5 = surface)</h4>
                    <input type="range" class="form-control-range" id="isovalueSlider"
                            min="0.0" max="1.0" step="0.001" value="0.5">
                 </div>
@@ -74,12 +75,14 @@
                     Touch: One finger drag to rotate, pinch to zoom, two finger drag to pan.
 
                     <h4>Description</h4>
-                    Upload a PDB or mmCIF structure. It is parsed in-browser with
-                    <a href="https://github.com/project-gemmi/gemmi">gemmi</a> (WebAssembly),
-                    a solvent-excluded or van&nbsp;der&nbsp;Waals surface field is computed,
-                    and the surface is extracted on the GPU with
-                    <a href="https://en.wikipedia.org/wiki/Marching_cubes">Marching Cubes</a>
+                    Upload a PDB or mmCIF structure, or an MRC/CCP4 electron-density
+                    map (.mrc / .ccp4 / .map). Structures are parsed in-browser with
+                    <a href="https://github.com/project-gemmi/gemmi">gemmi</a> (WebAssembly);
+                    a solvent-excluded or van&nbsp;der&nbsp;Waals surface field is computed, or
+                    the density map is read directly. The isosurface is extracted on the GPU
+                    with <a href="https://en.wikipedia.org/wiki/Marching_cubes">Marching Cubes</a>
                     via <a href="https://github.com/Twinklebear/webgpu-marching-cubes">webgpu-marching-cubes</a>.
+                    Density-map contour levels are set in σ (RMSD) units.
                 </div>
             </div>
         </div>

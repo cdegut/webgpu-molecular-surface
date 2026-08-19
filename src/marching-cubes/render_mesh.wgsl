@@ -19,7 +19,7 @@ struct VertexOutput {
 struct ViewParams {
     proj_view: mat4x4<f32>,
     volume_dims: uint4,
-    voxel_size: f32,
+    voxel_size: vec3<f32>,
     camera_pos: vec3<f32>,
 };
 

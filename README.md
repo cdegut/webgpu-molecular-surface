@@ -6,11 +6,16 @@ Parses PDB / mmCIF / mmJSON coordinates with
 [gemmi](https://github.com/project-gemmi/gemmi) compiled to WebAssembly, builds a
 solvent-excluded (SES) or van der Waals (VDW) scalar field, extracts the surface
 on the GPU with marching cubes, and renders it with smooth shading. Atoms can
-also be shown as ray-traced CPK spheres.
+also be shown as ray-traced CPK spheres. MRC/CCP4 electron-density maps
+(`.mrc`, `.ccp4`, `.map`) are read by a small native parser and run through the
+same GPU marching-cubes route, with contour levels set in σ (RMSD) units.
 
 ## Features
 
 - SES and VDW molecular surfaces (float32 scalar field, GPU marching cubes)
+- MRC/CCP4 electron-density maps — native TS parser, σ-based contouring,
+  anisotropic voxel spacing, auto-downsampling to the grid-resolution cap
+  (up to Ultra/512)
 - Smooth shading from field-gradient normals (crack-free, edge-manifold mesh)
 - Atom spheres rendered as instanced billboard impostors with CPK colours
 - In-browser parsing via gemmi WASM — no server, local file upload only
@@ -20,7 +25,7 @@ also be shown as ray-traced CPK spheres.
 
 - `src/marching-cubes/` — GPU marching cubes core, adapted from
   [Twinklebear/webgpu-marching-cubes](https://github.com/Twinklebear/webgpu-marching-cubes)
-- `src/molecular/` — gemmi WASM adapter, surface-field computation, atom rendering
+- `src/molecular/` — gemmi WASM adapter, surface-field computation, MRC map parser, atom rendering
 - `src/app.ts` — application entry point
 - `public/wasm/` — gemmi WASM runtime (`gemmi.js`, `gemmi.wasm`)
 - `scripts/check_manifold.mjs` — verifies the marching-cubes case table is
